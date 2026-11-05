@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>山水意境 · 游山玩水钓鱼</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f3f1ec; }
+  canvas { display: block; }
+  /* 留白晕边：边缘向宣纸白过渡，而不是压暗 */
+  #paper {
+    position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 75% 70% at 50% 46%, rgba(250,248,243,0) 55%, rgba(250,248,243,0.55) 100%);
+  }
+  /* 宣纸颗粒 */
+  #grain {
+    position: fixed; inset: 0; pointer-events: none; opacity: 0.06; mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='260'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.55  0 0 0 0 0.5  0 0 0 0 0.42  0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+  #title {
+    position: fixed; left: 28px; top: 28px; pointer-events: none;
+    writing-mode: vertical-rl; font-family: "STKaiti", "KaiTi", "楷体", serif;
+    color: #3a3f4a; font-size: 26px; letter-spacing: 8px; opacity: 0.82;
+  }
+  #title small { font-size: 13px; letter-spacing: 3px; opacity: 0.7; margin-top: 10px; }
+  #seal {
+    position: fixed; left: 30px; bottom: 30px; pointer-events: none;
+    width: 30px; height: 30px; background: #b8342c; color: #f6e9e2; border-radius: 3px;
+    font: 15px/30px "STKaiti", "KaiTi", serif; text-align: center; opacity: 0.85;
+  }
+  #hint {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); pointer-events: none; white-space: nowrap;
+    font: 14px "STKaiti", "KaiTi", serif; letter-spacing: 2px; color: #4a5260; opacity: 0.85;
+    padding: 4px 18px; background: rgba(250,246,236,0.7); border-top: 1px solid rgba(120,110,90,0.3); border-bottom: 1px solid rgba(120,110,90,0.3);
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+  "lil-gui": "https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm"
+} }
+</script>
+</head>
+<body>
+<div id="paper"></div>
+<div id="grain"></div>
+<div id="title">山水意境<small>游山玩水 · 小样</small></div>
+<div id="seal">意</div>
+<div id="hint">WASD 行走 · E 登船 · F 钓鱼 · Q 御剑 · T 时辰 · R 细雨 · M 静音 · G 面板 · H 帮助</div>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
