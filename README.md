@@ -4,6 +4,14 @@
 
 基于 Three.js 的浏览器交互小样，包含自定义水彩着色、山水场景、时辰切换、细雨和程序化音景。界面为中文。
 
+## 在线体验与发布
+
+在线体验：[Inkborne · 山水意境](https://leanforest.github.io/inkborne/)。
+
+推送到 `master` 后，GitHub Actions 会自动将 `spike/` 目录发布到 GitHub Pages，无需构建。也可以在 Actions 中手动运行 `Deploy Inkborne to GitHub Pages` 工作流。
+
+工作流配置位于 `.github/workflows/pages.yml`。仓库的 Settings → Pages → Build and deployment → Source 应选择 **GitHub Actions**。
+
 ## 本地运行
 
 需要 Python 3 和支持 WebGL 的现代桌面浏览器。在项目根目录执行：
