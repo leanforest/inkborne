@@ -1,0 +1,91 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>录环境声轨（横版）</title>
+<!-- 横版短视频的环境声：只有风、水、鸟、雨、桨、御剑（音乐总线静音，配乐在发布时由平台加）。
+     时间点对应 promo/src/wide/ShanShuiWide.tsx 的小节网格（1 小节 = 2 秒，0:18 御剑爆点）。
+     点页面任意处开始；完成后存到 video/amb_wide.wav，再复制到 promo/public/audio/amb_wide.wav。 -->
+<body style="margin:0;background:#f2ede2;font:20px KaiTi,serif;display:flex;align-items:center;justify-content:center;height:100vh">点击开始录环境声</body>
+<script type="module">
+import { createAudio } from './audio.js';
+
+const TOTAL = 32;
+const BAR = (n) => n * 2;                      // 第 n 小节线（从 0 起）→ 秒
+
+// [时间(秒), 动作]
+const EVENTS = [
+  // ①② 画 → 入画：云上一缕风，俯冲时风声涌起，穿云后落到水边
+  [0, (a) => { a.setMood('清晨'); a.setWind(0.22, 90); a.setWater(0.15); a.setBirds(false); }],
+  [BAR(1), (a) => a.setWind(0.45, 60)],
+  [BAR(1) + 0.9, (a) => a.setWind(0.7, 40)],
+  [BAR(2) + 0.6, (a) => a.setWind(0.35, 10)],
+  [BAR(2) + 1.6, (a) => { a.setWind(0.06, 0); a.setWater(0.7); a.setBirds(true); }],
+  // ③–⑥ 峰台楼阁、桃花、湖舟、细雨
+  [BAR(3), (a) => { a.setWind(0.12, 0); a.setWater(0.5); }],
+  [BAR(4), (a) => { a.setWind(0.05, 0); a.setWater(0.6); }],
+  [BAR(5), (a) => { a.setMood('正午'); a.setWater(1); }],
+  [BAR(5) + 0.4, (a) => a.sfx.oar()],
+  [BAR(5) + 1.5, (a) => a.sfx.oar()],
+  [BAR(6) - 0.5, (a) => { a.setRain(1); a.setBirds(false); }],
+  [BAR(7) - 0.6, (a) => a.setRain(0)],
+  // ⑦ 暮色 ⑧ 蓄力：环境声收窄，最后半小节几乎无声，给配乐蓄力
+  [BAR(7), (a) => { a.setMood('黄昏'); a.setWind(0.1, 0); a.setWater(0.5); }],
+  [BAR(8), (a) => { a.setWind(0.05, 0); a.setWater(0.3); }],
+  [BAR(8) + 1.0, (a) => { a.setWind(0, 0); a.setWater(0.04); }],
+  // ⑨ 0:18 御剑起飞 ⑩ 云海穿行
+  [BAR(9), (a) => { a.sfx.swordUp(); a.setWind(0.6, 40); a.setWater(0.2); }],
+  [BAR(9) + 1.2, (a) => a.setWind(0.85, 60)],
+  [BAR(11), (a) => { a.setWind(1, 80); a.setWater(0); }],
+  // ⑪ 落款：风声渐远
+  [BAR(13) - 0.2, (a) => a.setWind(0.5, 60)],
+  [BAR(13) + 0.8, (a) => a.setWind(0.25, 40)],
+  [BAR(14), (a) => a.setWind(0.12, 20)],
+  [BAR(15), (a) => a.setWind(0.05, 0)],
+];
+
+async function run() {
+  document.body.textContent = '录制中……';
+  const audio = createAudio();
+  audio.vols.music = 0;          // 不要古琴和箫：配乐由平台加
+  audio.start();
+  // 采样器：总线 → ScriptProcessor 收集 PCM（静音接到输出，保证持续拉流）
+  const ac = audio.tap(null);
+  const proc = ac.createScriptProcessor(4096, 2, 2);
+  const L = [], R = [];
+  let rec = false;
+  proc.onaudioprocess = (e) => { if (!rec) return; L.push(new Float32Array(e.inputBuffer.getChannelData(0))); R.push(new Float32Array(e.inputBuffer.getChannelData(1))); };
+  const mute = ac.createGain(); mute.gain.value = 0; proc.connect(mute); mute.connect(ac.destination);
+  audio.tap(proc);
+  await ac.resume();
+  // 总音量启动时 3 秒渐入，先等它到位、环境声起来，再开始计时（演奏时间 = 录音时间）
+  await new Promise((r) => setTimeout(r, 3300));
+  rec = true;
+  const t0 = ac.currentTime;
+  // 用 Worker 计时：后台标签页里主线程定时器会被节流到 1 秒一次
+  const w = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 10)'], { type: 'text/javascript' })));
+  let i = 0;
+  await new Promise((done) => {
+    w.onmessage = () => {
+      const t = ac.currentTime - t0;
+      while (i < EVENTS.length && EVENTS[i][0] <= t) EVENTS[i++][1](audio);
+      document.title = `REC ${t.toFixed(1)}/${TOTAL.toFixed(1)}`;
+      if (t >= TOTAL + 0.3) { w.terminate(); done(); }
+    };
+  });
+  rec = false;
+  // 编码 WAV（16 位立体声）
+  const n = L.reduce((a, b) => a + b.length, 0), sr = ac.sampleRate;
+  const buf = new ArrayBuffer(44 + n * 4), v = new DataView(buf);
+  const ws = (o, s) => [...s].forEach((c, k) => v.setUint8(o + k, c.charCodeAt(0)));
+  ws(0, 'RIFF'); v.setUint32(4, 36 + n * 4, true); ws(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 16, true); ws(36, 'data'); v.setUint32(40, n * 4, true);
+  let o = 44;
+  for (let b = 0; b < L.length; b++) for (let k = 0; k < L[b].length; k++) {
+    v.setInt16(o, Math.max(-1, Math.min(1, L[b][k])) * 32767, true); v.setInt16(o + 2, Math.max(-1, Math.min(1, R[b][k])) * 32767, true); o += 4;
+  }
+  await fetch('/__clip?name=amb_wide.wav', { method: 'POST', body: buf });
+  document.title = `AUDIO DONE ${(n / sr).toFixed(1)}s ${sr}Hz`;
+  document.body.textContent = '完成';
+}
+window.__startRec = run;
+addEventListener('click', run, { once: true });
+</script>

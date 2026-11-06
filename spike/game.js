@@ -51,6 +51,19 @@ export function startGame(W) {
   const toast = (t, sec = 2.2) => { ui.toast.textContent = t; ui.toast.classList.add('on'); toastTimer = sec; };
   let helpOn = false, helpTimer = 0;
 
+  // ───────────────────────── 录制模式 ─────────────────────────
+  // 网址加 ?rec：隐藏所有界面文字和鼠标，只留画面、水墨开场和渔获卡片；U 键随时切换。
+  // 网址加 ?fish=鳜鱼：之后每一竿都钓到这种鱼（拍渔获卡片用）。
+  const qs = new URLSearchParams(location.search);
+  const recCss = document.createElement('style');
+  recCss.textContent = `
+    body.rec #hint, body.rec #title, body.rec #seal, body.rec #g-prompt, body.rec #g-toast,
+    body.rec #g-basket, body.rec #g-mode, body.rec #g-help, body.rec .lil-gui{display:none!important}
+    body.rec, body.rec *{cursor:none!important}`;
+  document.head.appendChild(recCss);
+  document.body.classList.toggle('rec', qs.has('rec'));
+  addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'u' && !e.repeat) document.body.classList.toggle('rec'); });
+
   // ───────────────────────── 输入 ─────────────────────────
   const keys = new Set();
   const pressed = new Set();
@@ -163,7 +176,7 @@ export function startGame(W) {
   rodPivot.visible = false;
   const rodTip = V3();
   loadGLB('./assets/hero.glb').then((g) => {
-    for (const n of ['hero_torso', 'hero_head', 'hero_armL', 'hero_armR', 'hero_legL', 'hero_legR', 'hero_ribbon', 'hero_sash']) {
+    for (const n of ['hero_torso', 'hero_head', 'hero_armL', 'hero_armR', 'hero_legL', 'hero_legR', 'hero_skirtL', 'hero_skirtR', 'hero_ribbon', 'hero_sash']) {
       const o = g.getObjectByName(n);
       if (!o) continue;
       const pivot = new THREE.Group();
@@ -176,7 +189,51 @@ export function startGame(W) {
     // 竿子：右手（armR 局部的手掌位置约在 -0.54 处）
     rodPivot.position.set(-0.02, -0.55, -0.02);
     parts.armR.add(rodPivot);
+    for (const k of ['legL', 'legR']) if (parts[k]) parts[k].userData.foot = footTable(parts[k]);
   });
+  // 腿绕髋摆动时脚底最低点的位置表：摆角 → [相对髋的高度, 前后位置]。
+  // 走路时两腿一前一后都会把脚抬离地面，要按这张表把身子往下放，让着地的那只脚踩实
+  const FOOT_A = 0.8, FOOT_N = 33;
+  function footTable(pivot) {
+    pivot.updateMatrixWorld(true);
+    const inv = pivot.matrixWorld.clone().invert(), pts = [], v = V3();
+    pivot.traverse((o) => {
+      if (!o.isMesh) return;
+      const m = inv.clone().multiply(o.matrixWorld), pos = o.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(m); pts.push(v.y, v.z); }
+    });
+    const tab = [];
+    for (let j = 0; j < FOOT_N; j++) {
+      const a = -FOOT_A + (2 * FOOT_A * j) / (FOOT_N - 1), c = Math.cos(a), s = Math.sin(a);
+      let lo = Infinity, lz = 0;
+      for (let i = 0; i < pts.length; i += 2) { const y = pts[i] * c - pts[i + 1] * s; if (y < lo) { lo = y; lz = pts[i] * s + pts[i + 1] * c; } }
+      tab.push([lo, lz]);
+    }
+    return tab;
+  }
+  function footAt(pivot) {
+    const tab = pivot.userData.foot;
+    const f = THREE.MathUtils.clamp((pivot.rotation.x + FOOT_A) / (2 * FOOT_A), 0, 1) * (FOOT_N - 1);
+    const j = Math.min(FOOT_N - 2, Math.floor(f)), t = f - j, A = tab[j], B = tab[j + 1];
+    return [A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t];
+  }
+  // 身子要下放多少，才能让两只脚中更低的那只正好踩在它脚下的地面上（坡上、桥上前后脚地面高度不同）
+  function plantBody() {
+    const ns = [];
+    const sy = Math.sin(hero.rotation.y), cy = Math.cos(hero.rotation.y);
+    for (const k of ['legL', 'legR']) {
+      const p = parts[k];
+      if (!p?.userData.foot) return 0;
+      const [fy, fz] = footAt(p);
+      const x = p.position.x, z = p.position.z + fz;
+      const wx = hero.position.x + cy * x + sy * z, wz = hero.position.z - sy * x + cy * z;
+      const g = walkHeight(wx, wz, S.y) ?? S.y;
+      ns.push(g - hero.position.y - p.position.y - fy);   // 这只脚刚好着地时 body 的高度
+    }
+    // 取低的那只脚着地；另一只最多插进地面 8 厘米（上坡迈出的前脚），再多就整体抬一点
+    const need = Math.min(ns[0], ns[1]), other = Math.max(ns[0], ns[1]);
+    return THREE.MathUtils.clamp(Math.max(need, other - 0.08), -0.45, 0.3);
+  }
 
   // 玩家的船（空船）停在栈桥尽头旁
   const pBoat = new THREE.Group();
@@ -397,7 +454,10 @@ export function startGame(W) {
     { name: '青鱼', w: 5, cm: [50, 95], col: '#3f5568', fin: '#2c3d4e', deep: true, note: '孤舟蓑笠翁，独钓寒江雪。<br>——柳宗元《江雪》' },
     { name: '金鲤', w: 1.2, cm: [45, 70], col: '#f2c94c', fin: '#e9a23b', legend: true, note: '传说中鲤跃龙门，今日竟被你钓起。' },
   ];
+  const forcedFish = qs.get('fish') && FISH.find((f) => f.name === qs.get('fish'));
+  if (qs.get('fish') && !forcedFish) console.warn(`?fish=${qs.get('fish')} 不是已有的鱼：${FISH.map((f) => f.name).join('、')}`);
   function rollFish(x, z) {
+    if (forcedFish) return forcedFish;
     const far = Math.hypot(x, z) > 70;
     const lotus = x > 22 && x < 52 && z > 4 && z < 28;
     const pool = FISH.map((f) => ({ f, w: f.w * (f.deep && far ? 3 : 1) * (f.lotus && lotus ? 5 : 1) * (f.deep && !far ? 0.4 : 1) }));
@@ -638,7 +698,15 @@ export function startGame(W) {
     const k = Math.min(1, speed / 18);
     if (P.ribbon) P.ribbon.rotation.x = THREE.MathUtils.lerp(P.ribbon.rotation.x, 0.15 + k * 1.15 + Math.sin(t * (4 + k * 10)) * (0.06 + 0.12 * k), 0.2);
     if (P.ribbon) P.ribbon.rotation.z = Math.sin(t * 2.3) * 0.08 * (1 - k * 0.5);
-    if (P.sash) P.sash.rotation.x = THREE.MathUtils.lerp(P.sash.rotation.x, 0.05 + k * 0.9 + Math.sin(t * (5 + k * 9) + 1) * (0.05 + 0.1 * k), 0.2);
+    if (P.sash) {
+      P.sash.rotation.x = THREE.MathUtils.lerp(P.sash.rotation.x, -0.04 - k * 0.35 + Math.sin(t * (5 + k * 9) + 1) * (0.04 + 0.08 * k), 0.2);
+      P.sash.rotation.z = Math.sin(t * (3 + k * 7)) * (0.04 + 0.18 * k);
+    }
+  }
+  function skirts(k) {
+    const P = parts;
+    if (P.skirtL) P.skirtL.rotation.x = P.legL.rotation.x * k;
+    if (P.skirtR) P.skirtR.rotation.x = P.legR.rotation.x * k;
   }
   function pose(dt, moving, speedK) {
     if (!parts.legL) return;
@@ -656,6 +724,7 @@ export function startGame(W) {
       P.armL.rotation.z = THREE.MathUtils.lerp(P.armL.rotation.z, 0.28, 0.1);
       P.armR.rotation.z = THREE.MathUtils.lerp(P.armR.rotation.z, -0.28, 0.1);
       P.head.rotation.x = -P.torso.rotation.x * 0.7;
+      skirts(0.5);
       return;
     }
     P.armL.rotation.z = THREE.MathUtils.lerp(P.armL.rotation.z, 0, 0.2);
@@ -667,17 +736,24 @@ export function startGame(W) {
       const row = Math.abs(S.boat.speed) > 0.3 ? Math.sin(S.phase) : 0;
       if (S.fish.st === 'idle') { P.armL.rotation.x = -0.9 + row * 0.45; P.armR.rotation.x = -0.9 + row * 0.45; }
       P.torso.rotation.x = row * 0.08;
+      skirts(0.83);
     } else {
-      const sw = moving ? Math.sin(S.phase) * 0.55 * speedK : 0;
-      body.position.y = moving ? Math.abs(Math.cos(S.phase)) * 0.04 * speedK : Math.sin(performance.now() / 900) * 0.008;
+      // 坡上（拱桥、台阶、山坡）步子迈小些：腿是直的，前后脚踩的地面高差太大，总有一只脚够不着地
+      const fx = Math.sin(hero.rotation.y), fz = Math.cos(hero.rotation.y), hx = hero.position.x, hz = hero.position.z;
+      const slope = Math.abs((walkHeight(hx + fx * 0.4, hz + fz * 0.4, S.y) ?? S.y) - (walkHeight(hx - fx * 0.4, hz - fz * 0.4, S.y) ?? S.y)) / 0.8;
+      const sw = moving ? (Math.sin(S.phase) * 0.55 * speedK) / (1 + 2.5 * Math.min(slope, 1)) : 0;
       P.legL.rotation.x = THREE.MathUtils.lerp(P.legL.rotation.x, sw, 0.3);
       P.legR.rotation.x = THREE.MathUtils.lerp(P.legR.rotation.x, -sw, 0.3);
+      // 脚踩实地面：迈步时两腿张开身子自然下沉（起伏由此而来），坡上按前后脚各自的地面高度落脚
+      const plant = plantBody() + (moving ? 0 : Math.sin(performance.now() / 900) * 0.004);
+      body.position.y = THREE.MathUtils.lerp(body.position.y, plant, 0.5);
       if (S.fish.st === 'idle') {
         P.armL.rotation.x = THREE.MathUtils.lerp(P.armL.rotation.x, -sw * 0.8, 0.3);
         P.armR.rotation.x = THREE.MathUtils.lerp(P.armR.rotation.x, sw * 0.8, 0.3);
       }
       P.torso.rotation.x = 0;
       P.torso.rotation.y = moving ? Math.sin(S.phase) * 0.1 * speedK : THREE.MathUtils.lerp(P.torso.rotation.y, 0, 0.2);
+      skirts(0.5);
     }
     // 钓鱼姿势：右臂前举，竿子斜指水面
     if (S.fish.st !== 'idle') {
@@ -759,7 +835,9 @@ export function startGame(W) {
           }
           S.phase += dt * sp * 2.6;
         }
-        hero.position.set(S.pos.x, THREE.MathUtils.lerp(hero.position.y || S.y, S.y, Math.min(1, dt * 14)), S.pos.z);
+        // 平滑只留给台阶这类突变；坡上、桥面直接跟地面走，免得上坡陷脚、下坡悬空
+        const hy = hero.position.y || S.y;
+        hero.position.set(S.pos.x, Math.abs(S.y - hy) > 0.15 ? THREE.MathUtils.lerp(hy, S.y, Math.min(1, dt * 14)) : S.y, S.pos.z);
         hero.rotation.y = S.yaw;
         pose(dt, moving, sp / 3.2);
         // 提示
@@ -908,5 +986,5 @@ export function startGame(W) {
     updateRipples(dt);
     pressed.clear();
   };
-  window.__game = { S, hero, pBoat, walkHeight, waterFree, pressFish, tryBoard, tryLand, takeOff, land, keys, audio, get atmos() { return atmos; }, skipIntro() { introState = 'ready'; enterPainting(); introT = 1; } };
+  window.__game = { S, hero, pBoat, walkHeight, waterFree, pressFish, tryBoard, tryLand, takeOff, land, keys, audio, get atmos() { return atmos; }, skipIntro() { introState = 'ready'; enterPainting(); introT = 1; }, enter() { introState = 'ready'; enterPainting(); }, get introState() { return introState; }, castSpot: () => castSpot(), snapCamera };
 }

@@ -242,6 +242,8 @@ export function createAudio() {
     },
     setWater(k) { waterK = k; if (ctx) loops.water.g.gain.setTargetAtTime(0.02 + k * 0.05 + st.rain * 0.03, ctx.currentTime, 0.6); },
     setBirds(on) { st.birds = on; },
+    // 录音轨用：把总线接到外部节点（如采样器），返回 AudioContext
+    tap(node) { if (ctx && node) master.connect(node); return ctx; },
     setMood(m) { st.mood = m; },
     sfx: {
       oar() { burst({ dur: 0.35, type: 'bandpass', f0: 900, f1: 400, q: 0.8, gain: 0.09 }); burst({ dur: 0.18, type: 'lowpass', f0: 300, gain: 0.05, delay: 0.05 }); },

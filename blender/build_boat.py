@@ -1,9 +1,9 @@
-# 乌篷小船 + 戴斗笠的渔夫（坐姿，持竹篙）
+# 乌篷小船 + 戴斗笠的渔夫（立于船尾撑篙）
 # 船身：沿船长放样的横截面（船头船尾上翘、收窄），船舷、横梁、木板缝；船篷：竹篾拱篷 + 篷骨
 import sys, os, math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *
-from mathutils import Vector
+from mathutils import Vector, Matrix
 
 EMPTY = '--empty' in sys.argv   # 空船：给玩家划的，不带渔夫
 reset()
@@ -100,24 +100,41 @@ for i in range(nl + 1):
 tubes('ribs', ribs, 0.02, RIB, res=2)
 
 if not EMPTY:
-    # 渔夫：坐在船尾，面朝船头，持竹篙
-    px = -1.75
-    base_z = 0.4
-    # 盘坐的下身
-    box('legs', (0.55, 0.62, 0.22), (px + 0.12, 0, base_z + 0.11), ROBE_D)
-    # 躯干：下宽上窄的袍子
-    robe = cyl('robe', 0.3, 0.72, (px, 0, base_z + 0.15), ROBE, seg=20, r_top=0.17)
-    for p in robe.data.polygons: p.use_smooth = True
-    # 头
-    head = cyl('head', 0.11, 0.2, (px + 0.02, 0, base_z + 0.86), SKIN, seg=10, r_top=0.09)
-    # 斗笠：宽檐圆锥 + 帽箍
-    cyl('hat', 0.46, 0.26, (px + 0.02, 0, base_z + 1.0), HAT, seg=24, r_top=0.03)
-    cyl('hat_band', 0.2, 0.05, (px + 0.02, 0, base_z + 1.03), HAT_D, seg=16, r_top=0.19)
-    # 手臂（向前伸，握篙）
-    for side in (1, -1):
-        tubes('arm', [[(px + 0.02, side * 0.2, base_z + 0.7), (px + 0.25, side * 0.22, base_z + 0.5), (px + 0.45, side * 0.08, base_z + 0.58)]], 0.06, ROBE, res=4)
-    # 竹篙：斜插入水
-    tubes('pole', [[(px + 0.6, 0.0, base_z + 1.4), (px + 0.45, 0.05, base_z + 0.58), (px - 1.2, 0.55, -1.2)]], 0.03, POLE, res=4)
+    # 渔夫：立在船尾，面朝船头，双手握竹篙斜撑入水（与主角共用 figure.py 的人体建模）
+    import figure as F
+    FC = F.palette('boatman', inner='#d9d3c3', robe='#5d7282', trim='#34424e', sash='#7d6b4f', pants='#3d434a',
+                   boot='#4a3a2c', sole='#cbbd9c', skin='#e2b994', hat='#d1b066', hat_b='#9a7a3a')
+    parts = {
+        'legL': F.part('bm_legL', lambda: F.build_leg(FC, 1), (0.09, 0, 0.95)),
+        'legR': F.part('bm_legR', lambda: F.build_leg(FC, -1), (-0.09, 0, 0.95)),
+        'skirtL': F.part('bm_skirtL', lambda: F.build_skirts(FC, 1, inner=False, outer_prof=F.SHORT_P), (0.09, 0, 0.97)),
+        'skirtR': F.part('bm_skirtR', lambda: F.build_skirts(FC, -1, inner=False, outer_prof=F.SHORT_P), (-0.09, 0, 0.97)),
+        'torso': F.part('bm_torso', lambda: (F.build_torso(FC), F.build_sash(FC, knot=False)), (0, 0, 0.95)),
+        'head': F.part('bm_head', lambda: F.shifted(lambda: (F.build_head(FC, hair_long=False), F.build_hat(FC, tilt=0.12, R=0.4)), (0, 0, -0.026)), (0, 0, 1.5)),
+        'armL': F.part('bm_armL', lambda: F.build_arm(FC, 1, wide=False), (F.ARM_J, 0, 1.42)),
+        'armR': F.part('bm_armR', lambda: F.build_arm(FC, -1, wide=False), (-F.ARM_J, 0, 1.42)),
+    }
+    # 站姿：右脚在前；双臂伸直握篙（刚体手臂按手→握点方向转过去）
+    for k, v in (('legR', -0.18), ('legL', 0.14), ('skirtR', -0.09), ('skirtL', 0.07)):
+        parts[k].rotation_euler.x = v
+    grip_hi, grip_lo = Vector((-0.02, -0.47, 1.16)), Vector((-0.2, -0.4, 1.0))
+    for k, side, g in (('armL', 1, grip_hi), ('armR', -1, grip_lo)):
+        J = Vector((side * F.ARM_J, 0, 1.42))
+        hand = Vector((side * (F.ARM_J + 0.024), -0.006, 0.9))
+        ob = parts[k]
+        ob.rotation_mode = 'QUATERNION'
+        ob.rotation_quaternion = (hand - J).rotation_difference(g - J)
+    parts['head'].rotation_euler.x = 0.08   # 微微低头看水
+    parts['torso'].rotation_euler.x = 0.05
+    # 竹篙穿过两手：上端在身前斜上方，下端从右舷外插入水中
+    d = (grip_lo - grip_hi).normalized()
+    pole_pts = [grip_hi - d * 0.5, grip_hi, grip_lo, grip_lo + d * 2.6]
+    F.tubes('pole', [pole_pts], 0.022, POLE, res=4)
+    fig = [o for o in bpy.context.scene.objects if o.name.startswith('bm_') or o.name.startswith('pole')]
+    bpy.context.view_layer.update()
+    place = Matrix.Translation((-1.55, 0.05, 0.38)) @ Matrix.Rotation(math.pi / 2, 4, 'Z')   # 人物 -Y 朝向 → 船头 +X，脚踩甲板
+    for o in fig:
+        o.matrix_world = place @ o.matrix_world
 # 船头盘着的绳子与小竹篓
 cyl('basket', 0.18, 0.28, (1.75, 0.2, 0.38), POLE, seg=12, r_top=0.14)
 tubes('rope', [[(2.1 + 0.12 * math.cos(a), -0.15 + 0.12 * math.sin(a), 0.42 + 0.01 * a) for a in [k * 0.5 for k in range(26)]]], 0.018, ROPE, res=2)
@@ -129,3 +146,5 @@ bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
 print('FACES', len(ob.data.polygons), 'DIMS', tuple(round(v, 2) for v in ob.dimensions))
 export_glb('boat_empty.glb' if EMPTY else 'boat.glb')
 preview('boat_empty.png' if EMPTY else 'boat.png', target=(0, 0, 0.5), dist=9, elev=14, azim=-35)
+if not EMPTY:
+    preview('boatman.png', target=(-1.6, 0, 1.15), dist=3.2, elev=10, azim=-55, res=(700, 700))

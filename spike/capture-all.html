@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>录制调度</title>
+<style>html,body{margin:0;background:#222;color:#ddd;font:14px sans-serif}iframe{border:0;display:block}</style>
+<!-- 依次在 iframe 里录每一镜。?shots=fly,intro 只录指定镜头。进度见标题和 window.__status
+     竖版（默认）：窗口需 540×960。横版：?set=wide，窗口建议 960×540；iframe 会强制 16:9。 -->
+<script type="module">
+const q = new URLSearchParams(location.search);
+const WIDE = q.get('set') === 'wide';
+const all = WIDE
+  ? ['hook', 'hall', 'peach', 'boatman', 'rain', 'dusk', 'gaze', 'takeoff', 'cloudrun', 'seal']
+  : ['fly', 'intro', 'dawn', 'walk', 'fish', 'board', 'row', 'rain', 'away', 'end'];
+const extra = WIDE ? {} : { fish: '&fish=' + encodeURIComponent('鳜鱼') };
+const common = WIDE ? '&set=wide&w=1920&h=1080' : '';
+// 踩点：?only=0,45,89&ss=1 原样传给每一镜，只出这几帧静帧到 video/frames/probe_<镜头>/
+const pass = ['only', 'ss'].map((k) => (q.get(k) ? `&${k}=${q.get(k)}` : '')).join('');
+const shots = q.get('shots') ? q.get('shots').split(',') : all;
+window.__status = { done: [], failed: [], current: null };
+// 用 Worker 计时：录制页在后台（窗口被遮住 / 面板隐藏）时，主线程定时器会被节流到一分钟一次
+const tick = new Worker(URL.createObjectURL(new Blob(['onmessage = (e) => setTimeout(() => postMessage(0), e.data)'], { type: 'text/javascript' })));
+const sleep = (ms) => new Promise((r) => { tick.onmessage = () => r(); tick.postMessage(ms); });
+// 失败的镜头（偶发网络错误、显存不足）在最后自动重录一次
+const queue = shots.map((id) => [id, 1]);
+for (let qi = 0; qi < queue.length; qi++) {
+  const [id, attempt] = queue[qi];
+  window.__status.current = id;
+  const f = document.createElement('iframe');
+  f.width = innerWidth; f.height = WIDE ? Math.round(innerWidth * 9 / 16) : innerHeight;
+  f.src = `./index.html?cap&shot=${id}${common}${pass}${extra[id] || ''}`;
+  document.body.appendChild(f);
+  let title = '';
+  for (;;) {
+    await sleep(1000);
+    title = f.contentDocument?.title || '';
+    document.title = `[${window.__status.done.length}/${shots.length}] ${title}`;
+    if (/^(DONE|FAIL)/.test(title)) break;
+  }
+  (title.startsWith('DONE') ? window.__status.done : window.__status.failed).push(id + ' ' + title);
+  if (!title.startsWith('DONE') && attempt < 2) queue.push([id, attempt + 1]);
+  try { f.contentWindow.__WORLD.renderer.forceContextLoss(); } catch (e) {}
+  f.remove();
+  await sleep(1500);
+}
+window.__status.current = null;
+document.title = `ALL DONE ${window.__status.done.length}/${shots.length}`;
+</script>

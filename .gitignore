@@ -23,3 +23,8 @@ venv/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Generated recording output
+video/
+promo/public/
+promo/out/

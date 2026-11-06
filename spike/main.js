@@ -14,6 +14,16 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 THREE.ColorManagement.enabled = false;
 
+// ───────────────────────── 逐帧录制（?cap）─────────────────────────
+// 网址加 ?cap：不跑实时循环，由 capture.js 一帧一帧推进（固定步长、虚拟时钟），画面再慢也不掉帧。
+const CAP = new URLSearchParams(location.search).has('cap');
+if (CAP) {
+  const p0 = performance.now(), realNow = performance.now.bind(performance);
+  let vt = 0;
+  performance.now = () => p0 + vt;
+  window.__vclock = { advance(dt) { vt += dt * 1000; }, realNow };
+}
+
 // ───────────────────────── 工具：随机与噪声 ─────────────────────────
 function mulberry32(a) {
   return function () {
@@ -191,7 +201,7 @@ function flatMat(hex, shade = 0.28, noiseAmt = 0.12, side = THREE.FrontSide) {
 }
 
 // ───────────────────────── 渲染器 / 场景 / 相机 ─────────────────────────
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: !CAP });   // 录制时抗锯齿全在离屏 MSAA + 超采样里做，省下显存
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
@@ -536,7 +546,7 @@ const PALETTES = {
 
 const TREES = [], BAMBOOS = [];
 function paintedTree({ x, z, y = null, height = 6, lean = [0, 0], palette = 'green', clumps = 5, dabs = 70,
-  dabSize = [0.9, 1.5], spread = 2.6, flat = 0.55, trunk = '#3d322e', trunkR = 0.16, clumpR = null }) {
+  dabSize = [0.9, 1.5], spread = 2.6, flat = 0.55, trunk = '#3d322e', trunkR = 0.16, clumpR = null, anchor = null, peak = null }) {
   const group = new THREE.Group();
   const baseY = y ?? islandHeight(x, z);
   group.position.set(x, baseY - 0.2, z);
@@ -565,7 +575,8 @@ function paintedTree({ x, z, y = null, height = 6, lean = [0, 0], palette = 'gre
   }
   group.add(dabCloud(pts));
   scene.add(group);
-  TREES.push({ group, palette, height });
+  // y 是手估的（岛石、山顶）→ 等石头/山峰精模换上后由 settleTrees() 按真实表面落地
+  TREES.push({ group, palette, height, settle: y !== null, anchor: anchor ?? [x, z], peak });
   return group;
 }
 
@@ -816,9 +827,11 @@ const ISLETS = [[-62, -28, 6, 'teal'], [52, -58, 7, 'green'], [-34, -86, 8, 'map
 }
 for (const [x, z, s, pal] of ISLETS) {
   const r = makeRock(s, x * 0.1, 0.75); r.position.set(x, -0.6, z); scene.add(r);
-  paintedTree({ x: x + 1, z, y: s * 0.55, height: s * 1.1, palette: pal, clumps: 4, dabs: 60, dabSize: [1, 1.7] });
-  paintedTree({ x: x - s * 0.5, z: z + s * 0.3, y: s * 0.35, height: s * 0.9, palette: 'teal', clumps: 3, dabs: 50, dabSize: [1, 1.7] });
+  paintedTree({ x: x + 1, z, y: s * 0.55, height: s * 1.1, palette: pal, clumps: 4, dabs: 60, dabSize: [1, 1.7], anchor: [x, z] });
+  paintedTree({ x: x - s * 0.5, z: z + s * 0.3, y: s * 0.35, height: s * 0.9, palette: 'teal', clumps: 3, dabs: 50, dabSize: [1, 1.7], anchor: [x, z] });
 }
+// 亭子把小岛那块石头整个占满了，岛边那棵树另给一块卧石托着（原先悬在水面上）。放在最后建，免得打乱前面石头的精模分配
+const tingStone = makeRock(3, 63, 0.55); tingStone.position.set(eastShore.x + 23, -0.6, -3.5); scene.add(tingStone);
 // ───────────────────────── 沙洲与荷塘（俯瞰时的点缀） ─────────────────────────
 const SHOALS = [];
 {
@@ -885,7 +898,7 @@ hall.position.set(100, 33.6, -110); hall.rotation.y = -0.3; LOW.push(hall);
 // 山顶几株松
 for (const { mesh, H } of peaks.slice(0, 10)) {
   if (mesh.position.length() > 130) continue;
-  paintedTree({ x: mesh.position.x, z: mesh.position.z, y: H - 2, height: H * 0.08, palette: 'pine', clumps: 3, dabs: 40, dabSize: [1.4, 2.4], flat: 0.35, spread: H * 0.05 });
+  paintedTree({ x: mesh.position.x, z: mesh.position.z, y: H - 2, height: H * 0.08, palette: 'pine', clumps: 3, dabs: 40, dabSize: [1.4, 2.4], flat: 0.35, spread: H * 0.05, peak: mesh });
 }
 
 // ───────────────────────── Blender 精模 ─────────────────────────
@@ -1073,7 +1086,58 @@ Promise.all([rawLoad('./assets/mountains.glb'), rawLoad('./assets/rocks.glb'), r
     r.geometry = rockGeos[i % rockGeos.length]; r.material = cunRockMat;
     r.scale.set(size / 9, (size * squash) / 8, size / 9);
   });
+  settleTrees();
 }).catch((e) => console.error('山石精模加载失败', e));
+
+// 树根落地：岛石、山峰换成精模后形状全变了，手估的 y 会让树悬空、半截埋进石头，甚至整棵伸到水面上。
+// 向下打射线找真实表面，取树根一圈里最低的点作根部；圈里有点落空（出了石头边）或坡太陡，就往锚点（石心 / 峰顶）挪
+function settleTrees() {
+  scene.updateMatrixWorld(true);
+  const solids = [...peaks.map((p) => p.mesh), ...ROCKS];
+  const ray = new THREE.Raycaster(), from = new THREE.Vector3(), down = new THREE.Vector3(0, -1, 0);
+  const groundY = (x, z) => { ray.set(from.set(x, 600, z), down); const h = ray.intersectObjects(solids, false)[0]; return h ? h.point.y : null; };
+  const v = new THREE.Vector3(), placed = [];
+  for (const t of TREES) {
+    if (!t.settle) continue;
+    let [ax, az] = t.anchor;
+    if (t.peak) {            // 峰顶不在峰心正上方（山体有歪斜），找几何最高点
+      const pos = t.peak.geometry.attributes.position; let best = -Infinity;
+      for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(t.peak.matrixWorld); if (v.y > best) { best = v.y; ax = v.x; az = v.z; } }
+    }
+    const r = Math.max(0.2, t.height * 0.035);       // 约树干粗细
+    const gap = Math.max(1.5, t.height * 0.3);       // 同一块石头上的两棵树别挤在一处
+    // 从原位置朝锚点一路试过去，再绕锚点转一圈，挑「不落空、离别的树够远、根下最平」的点
+    const cand = [];
+    const x0 = t.peak ? ax : t.group.position.x, z0 = t.peak ? az : t.group.position.z;
+    const d0 = Math.hypot(ax - x0, az - z0);
+    for (let s = 0; s <= 1.0001; s += 0.04) cand.push([x0 + (ax - x0) * s, z0 + (az - z0) * s, s * d0]);
+    for (const rr of [0.6, 1.2, 1.8, 2.6]) for (let k = 0; k < 10; k++) {
+      const a = Math.atan2(z0 - az, x0 - ax) + (k * Math.PI) / 5;
+      cand.push([ax + Math.cos(a) * rr, az + Math.sin(a) * rr, d0 + rr]);
+    }
+    let best = null;
+    for (const [x, z, moved] of cand) {
+      if (placed.some(([px, pz]) => Math.hypot(px - x, pz - z) < gap)) continue;
+      const c = groundY(x, z);
+      if (c === null) continue;
+      let lo = c, hi = c;
+      for (let k = 0; k < 8 && lo !== null; k++) {   // 根外再留半圈余量，不许骑在石头边上
+        const y = groundY(x + Math.cos(k * 0.785) * r * 1.5, z + Math.sin(k * 0.785) * r * 1.5);
+        if (y === null) lo = null; else { lo = Math.min(lo, y); hi = Math.max(hi, y); }
+      }
+      if (lo === null) continue;
+      const slope = (hi - lo) / (r * 1.5);
+      if (slope > 2.5 && !t.peak) continue;          // 峭壁上不长树（峰顶的松除外：本来就是长在尖上的）
+      const score = slope + moved * 0.08;            // 坡度为主，挪得少的优先
+      if (!best || score < best.score) best = { x, z, y: lo, score };
+      if (slope < 0.5 && !t.peak) break;             // 足够平就不再往里挪
+    }
+    // 石头太小（细高的石柱）放不下第二棵：宁可不要，也不留一棵悬在半空/水上的树
+    if (!best) { scene.remove(t.group); t.removed = true; continue; }
+    t.group.position.set(best.x, best.y - 0.12, best.z);
+    placed.push([best.x, best.z]);
+  }
+}
 const loadGLB = (url) => new Promise((res, rej) => gltfLoader.load(url, (g) => res(stylize(g.scene)), undefined, rej));
 const hiState = { useHigh: true };
 function applyDetail() { LOW.forEach((o) => (o.visible = !hiState.useHigh)); HIGH.forEach((o) => (o.visible = hiState.useHigh)); }
@@ -1127,7 +1191,13 @@ Promise.all([loadGLB('./assets/boat.glb'), loadGLB('./assets/plants.glb'), loadG
   attachHigh(ting, named(st, 'ting'), 0.72, -Math.PI / 2);   // 入口台阶正对拱桥（game.js 的亭内可走区按此朝向）
   attachHigh(tower, named(st, 'pagoda'), 0.62, 0);
   attachHigh(br, named(st, 'bridge'), 0.92, 0);
-  loadGLB('./assets/pier.glb').then((pg) => { attachHigh(pierG, named(pg, 'pier'), 1.0, 0); applyDetail(); });
+  loadGLB('./assets/pier.glb').then((pg) => {
+    // 栈桥在 Blender 里 join 后原点留在第一块木板上（桥面高 0.9），named() 会把它清零、整座桥沉到水面；
+    // 这里把原点偏移加回来，桥面回到 0.9，和 game.js walkHeight 的 0.95 对上，人物不再悬空
+    const off = pg.getObjectByName('pier').position.clone();
+    attachHigh(pierG, named(pg, 'pier'), 1.0, 0, off.y).position.x = off.x;
+    applyDetail();
+  });
   applyDetail();
 }).catch((e) => console.error('第一批精模加载失败', e));
 
@@ -1757,6 +1827,21 @@ fq.add(QUALITY, 'scale', { 省电: 1, 标准: Math.min(devicePixelRatio, 2), 超
 fa.addColor(U.uFarTint, 'value').name('远山蓝');
 
 // ───────────────────────── 循环 ─────────────────────────
+let capSS = 1;
+// 录视频用的最高画质：outW 为输出宽度，ss 为超采样倍数；MSAA 拉到显卡上限，反射、阴影、山体全用最高精度
+// （4K 渲染 + 8x MSAA 会让浏览器显存不足、上下文丢失，所以 MSAA 封顶 4x：配合 2x 超采样每像素 16 个采样）
+function capQuality(outW, ss = 2, msaa = 4) {
+  const maxS = Math.min(msaa, renderer.capabilities.maxSamples);
+  QUALITY.msaa = maxS;
+  for (const t of [composer.renderTarget1, composer.renderTarget2]) { t.samples = maxS; t.dispose(); }
+  capSS = ss; QUALITY.scale = (outW * ss) / innerWidth;
+  resize();
+  const pr = renderer.getPixelRatio(), rt = water.getRenderTarget();
+  rt.setSize(Math.floor(innerWidth * pr), Math.floor(innerHeight * pr)); rt.samples = Math.min(4, maxS); rt.dispose();
+  SHADOW_N = 4096; shadowRT.setSize(SHADOW_N, SHADOW_N); U.uShadowTexel.value = 1 / SHADOW_N;
+  for (const p of peaks) if (p.lo) { p.mesh.geometry = p.hi; p.lo = null; }
+  return { msaa: maxS, scale: QUALITY.scale, size: [renderer.domElement.width, renderer.domElement.height] };
+}
 function resize() {
   renderer.setPixelRatio(+QUALITY.scale);
   composer.setPixelRatio(+QUALITY.scale);
@@ -1764,8 +1849,10 @@ function resize() {
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
   const pr = renderer.getPixelRatio();
-  watercolor.uniforms.uRes.value.set(innerWidth * pr, innerHeight * pr);
-  watercolor.uniforms.uTexel.value.set(1 / (innerWidth * pr), 1 / (innerHeight * pr));
+  // 超采样录制时，笔触 / 积边 / 纸纹按输出分辨率计算，画风与 1 倍渲染一致，只是边缘更干净
+  const fx = pr / capSS;
+  watercolor.uniforms.uRes.value.set(innerWidth * fx, innerHeight * fx);
+  watercolor.uniforms.uTexel.value.set(1 / (innerWidth * fx), 1 / (innerHeight * fx));
   depthRT.setSize(Math.floor(innerWidth * pr), Math.floor(innerHeight * pr));
   DEPTH_U.uRes.value.set(innerWidth * pr, innerHeight * pr);
   dabUniforms.uScale.value = (innerHeight * renderer.getPixelRatio()) / (2 * Math.tan((camera.fov * Math.PI) / 360));
@@ -1787,7 +1874,7 @@ function depthPrepass() {
 function updateLOD() {
   for (const p of peaks) if (p.lo) p.mesh.geometry = p.mesh.position.distanceTo(camera.position) - p.H * 0.3 > 260 ? p.lo : p.hi;
 }
-const SHADOW_N = 2048, SHADOW_HALF = 60;
+let SHADOW_N = 2048; const SHADOW_HALF = 60;
 const shadowRT = new THREE.WebGLRenderTarget(SHADOW_N, SHADOW_N, { depthTexture: new THREE.DepthTexture(SHADOW_N, SHADOW_N) });
 const shadowCam = new THREE.OrthographicCamera(-SHADOW_HALF, SHADOW_HALF, SHADOW_HALF, -SHADOW_HALF, 1, 420);
 const shadowDepthMat = new THREE.MeshDepthMaterial({ side: THREE.DoubleSide });
@@ -1814,8 +1901,13 @@ function shadowPass() {
 const clock = new THREE.Clock();
 const tmp = new THREE.Vector3();
 function animate() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+  frame(Math.min(clock.getDelta(), 0.05));
+  requestAnimationFrame(animate);
+}
+function frame(dt) {
+  if (CAP) window.__vclock.advance(dt);
   const t = (U.uTime.value += dt);
+  if (window.__capPre) window.__capPre(dt, t);
 
   if (tween) {
     tween.t = Math.min(1, tween.t + dt / 2.2);
@@ -1827,6 +1919,7 @@ function animate() {
   if (window.__gameUpdate) window.__gameUpdate(dt, t);
   controls.update();
   if (camera.position.y < 0.8) camera.position.y = 0.8;
+  if (window.__capPost) window.__capPost(dt, t);
 
   for (const m of mists) {
     m.rotation.y = Math.atan2(camera.position.x - m.position.x, camera.position.z - m.position.z);
@@ -1873,14 +1966,13 @@ function animate() {
   shadowPass();
   depthPrepass();
   composer.render();
-  requestAnimationFrame(animate);
 }
-animate();
+if (CAP) window.__frame = frame; else animate();
 
 // ───────────────────────── 玩法层（game.js）─────────────────────────
 window.__WORLD = {
   THREE, scene, camera, controls, renderer, U, islandHeight, flatMat, loadGLB, named, rand,
   pierG, br, ting, islet, peaks, ROCKS, TREES, BAMBOOS, WILLOWS, eastShore, myBoat, boat2,
-  waterUniforms, gui, stopTween: () => { tween = null; },
+  waterUniforms, gui, stopTween: () => { tween = null; }, resize, QUALITY, CAP, capQuality,
 };
-import('./game.js').then((m) => m.startGame(window.__WORLD)).catch((e) => console.error('game.js 加载失败', e));
+import('./game.js').then((m) => m.startGame(window.__WORLD)).then(() => CAP && import('./capture.js')).catch((e) => console.error('game.js 加载失败', e));

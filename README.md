@@ -14,7 +14,7 @@
 
 ## 本地运行
 
-需要 Python 3 和支持 WebGL 的现代桌面浏览器。在项目根目录执行：
+需要 Python 3 和支持 WebGL 的现代桌面浏览器。Windows 可双击根目录的 `start.bat` 启动并打开浏览器，或在项目根目录执行：
 
 ```sh
 python tools/serve.py spike 5173
@@ -57,6 +57,7 @@ spike/
 blender/
   common.py        建模、导出及预览工具
   arch.py          古建筑构件库
+  figure.py        主角与船夫共用的人物建模库
   build_*.py       模型生成源码
 tools/
   serve.py         禁用缓存的本地服务器，支持开发截图
@@ -75,6 +76,12 @@ blender --background --factory-startup --python blender/build_boat.py
 blender --background --factory-startup --python blender/build_boat.py -- --empty
 ```
 
-其他模型分别由 `build_hero.py`、`build_pavilion.py`、`build_peach.py`、`build_plants.py`、`build_structures.py`、`build_pier.py` 和 `build_sword.py` 生成，调用方式相同。`common.py` 和 `arch.py` 是公共模块，不需要单独执行。
+其他模型分别由 `build_hero.py`、`build_pavilion.py`、`build_peach.py`、`build_plants.py`、`build_structures.py`、`build_pier.py` 和 `build_sword.py` 生成，调用方式相同。`common.py`、`arch.py` 和 `figure.py` 是公共模块，不需要单独执行。
 
 预览图保存在 `blender/previews/`，开发截图保存在 `tools/snaps/`，均已加入忽略规则。
+
+## 整理范围
+
+本目录保留游戏运行代码、全部运行模型、Blender 建模源码、本地启动及开发录制工具。参考图、建模预览、调试截图、一次性补丁、宣传视频工程、成片和依赖缓存未纳入。
+
+`spike/capture.js`、`shots*.js`、`capture-all.html` 与 `record-*.html` 是可选录制工具，普通游玩无需使用。录制视频时，服务器才需要额外安装 `imageio-ffmpeg`，输出写入本地 `video/` 或 `promo/public/`，这些生成目录不入库。
